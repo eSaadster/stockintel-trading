@@ -146,10 +146,12 @@ async def connect():
                   f"({'active' if acct.status == capri_pb2.ACCOUNT_STATUS_ACTIVE else 'inactive'})")
 
         # 2. Send a command — e.g., list orders
+        # (use the broker/client codes from the Welcome frame)
+        acct = welcome.welcome.accounts[0]
         cmd = capri_pb2.ClientFrame()
         cmd.request_id = "b7e3c1d2-4f5a-6b7c-8d9e-0f1a2b3c4d5e"
-        cmd.list_orders.broker_code = "sandbox"
-        cmd.list_orders.client_code = "CS01"
+        cmd.list_orders.broker_code = acct.broker_code
+        cmd.list_orders.client_code = acct.client_code
         cmd.list_orders.count = 25
         await ws.send(cmd.SerializeToString())
 
@@ -230,25 +232,31 @@ You can now send commands: place orders, cancel orders, fetch account balances, 
 
 ## 6. Sandbox Testing
 
-> **Sandbox account:** When you connect with a sandbox token, your session includes a pre-configured synthetic trading account:
-> - `broker_code`: `"sandbox"`
-> - `client_code`: `"CS01"`
-> - PIN: `"1234"`
+> **Sandbox account:** When you connect with a sandbox token, your session includes a pre-configured synthetic trading account with PIN `"1234"`.
 >
-> No account setup is needed — use these values directly in `PlaceOrder`, `CancelOrder`, and any other account-scoped commands.
+> The `broker_code` and `client_code` are **assigned per user** — read them from `Welcome.accounts` after connecting rather than hardcoding them (e.g. an account may look like `abc/SI8616`). No account setup is needed; use the values from `Welcome.accounts` plus PIN `"1234"` in `PlaceOrder`, `CancelOrder`, and any other account-scoped commands.
+>
+> Code samples in these docs that show `broker_code: "sandbox"` / `client_code: "CS01"` are placeholders — substitute your own values from `Welcome.accounts`.
 
 The sandbox broker provides **deterministic order outcomes** based on the `quantity` you submit:
 
 | Quantity | Outcome |
 |---|---|
-| `5000` | Order is **rejected** (`ORDER_STATUS_ERROR`) |
-| `1000` | Order goes `PARTIAL` (50%) then `FILLED` |
-| `10` | Order is immediately **cancelled** by the broker |
-| `1` | Order is **rejected** (`ORDER_STATUS_REJECTED`) |
+| `5000` | Order is **rejected** (`ORDER_STATUS_ERROR`, with an insufficient-cash message) |
+| `1000` | Order fills in **several `PARTIAL` increments**, then `FILLED` |
+| `10` | Order is immediately **cancelled** by the broker (`RECEIVED` → `QUEUED` → `CANCELLED`) |
+| `1` | Order is **rejected** (`RECEIVED` → `REJECTED`) |
 | `50` | Order stays `QUEUED` until you cancel it manually |
-| Any other value | Order fills immediately (`SUBMITTED` → `RECEIVED` → `QUEUED` → `FILLED`) |
+| Any other value | Order fills immediately (`RECEIVED` → `QUEUED` → `FILLED`) |
 
 Use these scenarios to test your order lifecycle handling, error recovery, and cancellation logic before going live.
+
+**Observed sandbox behavior notes** (verified against the live sandbox, 2026-07):
+
+- No `ORDER_STATUS_SUBMITTED` event is emitted — execution streams begin at `RECEIVED`.
+- To cancel the `50`-quantity order, pass the **`exchange_order_id`** in `CancelOrder`. Cancels sent with only `broker_order_id` are acknowledged but have no effect. The `exchange_order_id` first appears on the `QUEUED` execution event (it is empty on `RECEIVED`), and is also available from `ListOrders`.
+- The sandbox has no market prices: `last_price` is always `0.0` and `Order.fills` is empty even for filled orders. Rely on `status` and `quantity_remaining` to track fill progress.
+- `GetSessionStatus` returns `SESSION_STATUS_NA` in the sandbox.
 
 ---
 
@@ -264,7 +272,7 @@ Use these scenarios to test your order lifecycle handling, error recovery, and c
     │                                    │
     │── ClientFrame { PlaceOrder } ─────▶│
     │◀── ServerFrame { PlaceOrder {} } ──│  (immediate empty ack)
-    │◀── ServerFrame { ExecutionEvent } ─│  (status: SUBMITTED → QUEUED → FILLED)
+    │◀── ServerFrame { ExecutionEvent } ─│  (status: RECEIVED → QUEUED → FILLED)
     │                                    │
     │── ClientFrame { GetAccount } ─────▶│
     │◀── ServerFrame { GetAccount } ─────│
@@ -286,7 +294,7 @@ Use these scenarios to test your order lifecycle handling, error recovery, and c
     │                                    │   (real-time pushes start after unlock)
     │── ClientFrame { PlaceOrder } ─────▶│
     │◀── ServerFrame { PlaceOrder {} } ──│  (immediate empty ack)
-    │◀── ServerFrame { ExecutionEvent } ─│  (status: SUBMITTED → QUEUED → FILLED)
+    │◀── ServerFrame { ExecutionEvent } ─│  (status: RECEIVED → QUEUED → FILLED)
     │                                    │
     │── close ──────────────────────────▶│
 ```

@@ -161,16 +161,17 @@ Cancel an open order. Returns an **immediate empty acknowledgement** — the def
 | `broker_code` | string | Yes | Account broker |
 | `client_code` | string | Yes | Account client code |
 | `broker_order_id` | string | At least one | Broker-assigned order ID (FIX tag 11) |
-| `exchange_order_id` | string | At least one | Exchange-assigned order ID (FIX tag 37) |
+| `exchange_order_id` | string | Effectively yes | Exchange-assigned order ID (FIX tag 37) — see note below |
 | `pin` | string | Yes | Account PIN |
 
 **Response: `CancelOrderResponse`** — empty message (acknowledgement only).
 
 **Key behavior:**
-- At least one of `broker_order_id` / `exchange_order_id` is required.
+- The schema requires at least one of `broker_order_id` / `exchange_order_id`, but **in practice always pass `exchange_order_id`**: cancels sent with only `broker_order_id` are acknowledged yet observed to have no effect (the order stays `QUEUED` and no outcome event is ever pushed). The `exchange_order_id` first appears on the order's `QUEUED` execution event (it is empty on `RECEIVED`) and is also available from `ListOrders`.
 - Like `PlaceOrder`, the response is an ack only. The definitive outcome arrives as an `ExecutionEvent` on the stream.
-- A successful cancel produces `ORDER_STATUS_CANCELLED` with `broker_orig_order_id` referencing the original order.
+- A successful cancel produces `ORDER_STATUS_CANCELLED` with `broker_orig_order_id` referencing the original order's `broker_order_id`. The cancellation execution carries its own **new** `broker_order_id` (it is a distinct cancel order at the broker).
 - A broker rejection of the cancel surfaces as an `ExecutionEvent` (e.g., `ORDER_STATUS_REJECTED`).
+- The `CANCELLED` execution event may arrive late or not at all on the cancelling connection (observed when cancelling orders placed on a previous connection, even though the cancel took effect). If you don't receive an outcome promptly, verify the order's state via `ListOrders` rather than assuming the cancel failed.
 
 ---
 
@@ -184,7 +185,7 @@ Retrieve paginated order history and status.
 |---|---|---|---|
 | `broker_code` | string | Yes | |
 | `client_code` | string | Yes | |
-| `status` | `OrderStatus` enum | No | Filter by status; `UNSPECIFIED` = all |
+| `status` | `OrderStatus` enum | No | Filter by status; `UNSPECIFIED` = all. **Known issue:** setting this filter has been observed to produce *no response at all* (no result, no error — the request hangs). Until fixed, omit it and filter client-side. |
 | `symbol` | string | No | Filter by symbol |
 | `market` | `Market` enum | No | Filter by market |
 | `side` | `OrderSide` enum | No | Filter by side |
@@ -302,6 +303,8 @@ Fetch the account snapshot: value, balance, buying power, and positions. Served 
 
 Current trading session status for a broker + market — a point-in-time query. Ongoing changes arrive automatically via `TradingSessionStatus` pushes; use this for the current value on demand.
 
+> **Sandbox:** the sandbox broker reports `SESSION_STATUS_NA` (it has no real market session). A `TradingSessionStatus` push is also delivered shortly after connect.
+
 **Request: `GetSessionStatusRequest`**
 
 | Field | Type | Required |
@@ -380,6 +383,12 @@ Pushed **automatically** for every order execution update your accounts are enti
 - Orders **you placed** on this connection: `request_id` in the `ServerFrame` echoes your `PlaceOrder`'s `request_id`.
 - Orders placed **outside** this connection (broker app, terminal, another channel): `request_id` is empty (`""`). Correlate by `broker_order_id` / `exchange_order_id`.
 
+**Field caveats (observed in sandbox, 2026-07):**
+- `exchange_order_id` is empty on the `RECEIVED` event and first populated on `QUEUED`. Capture it there — it is required for a working `CancelOrder`.
+- `quantity_remaining` is `0` on the `RECEIVED` event (not the full order quantity); it becomes meaningful from `QUEUED` onward.
+- On `PARTIAL` events, `quantity_executed` was observed to carry the **last fill quantity**, not the documented cumulative total (`quantity_remaining` is consistent with cumulative fills, so prefer it for progress tracking). On `FILLED`, `quantity_executed` equals the full order quantity.
+- In the sandbox, `last_price` is always `0.0` and `last_quantity` mirrors the order quantity — sandbox fills carry no prices.
+
 ---
 
 ### `TradingSessionStatus`
@@ -456,13 +465,19 @@ Pushed **automatically** when a market's trading session status changes. You onl
 
 ```
 SUBMITTED → RECEIVED → QUEUED → FILLED
-                              ↘ PARTIAL → FILLED
+                              ↘ PARTIAL (×N) → FILLED
                               ↘ CANCELLED
                               ↘ REJECTED
                               ↘ ERROR
 ```
 
 Any non-terminal status may transition to `CANCELLED` when a cancel request is accepted by the broker.
+
+**Observed notes (sandbox, 2026-07):**
+
+- No `SUBMITTED` event is emitted — streams begin at `RECEIVED`. Don't wait for `SUBMITTED` before tracking an order.
+- Rejections can skip `QUEUED` (`RECEIVED` → `REJECTED`), and validation errors (`ORDER_STATUS_ERROR`) can arrive as the very first and only event, with no `broker_order_id` assigned.
+- An order may emit multiple `PARTIAL` events before `FILLED`.
 
 **Terminal states:** `FILLED` (5), `ERROR` (6), `CANCELLED` (7), `REJECTED` (8). Once an order reaches one of these, no further updates are sent.
 

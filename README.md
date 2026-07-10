@@ -66,6 +66,7 @@ Sec-WebSocket-Protocol: capri.v1
 # Server pushes Welcome immediately, then you send commands as binary frames
 
 # Place a market order (pseudo — actual frame is a serialized ClientFrame protobuf)
+# broker_code and client_code are placeholders. Use the values from Welcome.accounts
 → ClientFrame {
     request_id: "550e8400-e29b-41d4-a716-446655440000"
     place_order: {
@@ -85,7 +86,7 @@ Sec-WebSocket-Protocol: capri.v1
 ← ServerFrame { request_id: "550e8400-..."  place_order: {} }
 
 # Then execution events stream in automatically
-← ServerFrame { request_id: "550e8400-..."  execution_event: { status: SUBMITTED ... } }
+← ServerFrame { request_id: "550e8400-..."  execution_event: { status: RECEIVED ... } }
 ← ServerFrame { request_id: "550e8400-..."  execution_event: { status: QUEUED ... } }
 ← ServerFrame { request_id: "550e8400-..."  execution_event: { status: FILLED ... } }
 ```
@@ -112,7 +113,7 @@ Protocol Buffers gives you generated, type-safe clients in Python, JavaScript/Ty
 
 | Environment | Token prefix | Purpose |
 |---|---|---|
-| **Sandbox** | `si_sb_` | Test strategies with deterministic order outcomes. The sandbox broker accepts any symbol; order outcomes are controlled by quantity. |
+| **Sandbox** | `si_sb_` | Test strategies with deterministic order outcomes. The sandbox broker accepts any symbol; order outcomes are controlled by quantity. Each user gets an assigned sandbox account, so read `broker_code` and `client_code` from `Welcome.accounts`. The PIN is `1234`. |
 | **Live** | `si_lv_` | Production trading with real brokers and markets. |
 
 Always develop and test against the sandbox first.

@@ -178,9 +178,11 @@ class StockIntelClient:
 async def main():
     client = await StockIntelClient(TOKEN).connect()
 
-    # Place an order
+    # Place an order — broker/client codes come from Welcome.accounts
+    # (they are assigned per user; the sandbox PIN is "1234")
+    acct = client.accounts[0]
     req_id = await client.place_order(
-        broker="sandbox", client="CS01", symbol="AAPL",
+        broker=acct.broker_code, client=acct.client_code, symbol="AAPL",
         side=capri_pb2.ORDER_SIDE_BUY, qty=100,
         pin="1234"
     )
@@ -433,6 +435,10 @@ The `.proto` file is standard proto3 and compiles with `protoc` for any supporte
 6. **Execution ordering** — An `ExecutionEvent` for your order may arrive **before** the `PlaceOrderResponse` acknowledgement. Always be ready to receive executions tagged with a `request_id` you just sent, even before the ack.
 
 7. **Keepalive** — The server sends native WebSocket pings. Your library should handle pong responses automatically. Do not implement application-level ping/pong — the `Ping`/`Pong` messages in the proto are reserved and not used.
+
+8. **Cancelling needs `exchange_order_id`** — Although the schema accepts `broker_order_id` alone, cancels sent without `exchange_order_id` are acknowledged but observed to have no effect. Capture `exchange_order_id` from the order's `QUEUED` execution event (it is empty on `RECEIVED`) or from `ListOrders`, and always include it in `CancelOrderRequest`.
+
+9. **`ListOrders` status filter hangs** — Setting `ListOrdersRequest.status` has been observed to produce no response at all (no result, no error). Omit the filter and filter client-side.
 
 ---
 
