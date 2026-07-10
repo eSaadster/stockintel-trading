@@ -144,6 +144,7 @@ Place a new order. Returns an **immediate empty acknowledgement** — the order'
 **Key behavior:**
 - The response is an **acceptance ack** — not an execution result.
 - All outcomes (fills, rejections, cancellations) arrive on the `ExecutionEvent` stream.
+- The ack says nothing about whether the market is open. Orders placed while the session is `SUSPENDED` are acked normally, then fail on the stream with a terminal `ORDER_STATUS_ERROR` event carrying a broker message such as `"Server not Connected."` and no `broker_order_id` (observed on live, 2026-07). To skip the round-trip, check `GetSessionStatus` before submitting.
 - An `ExecutionEvent` for the order **may arrive before** the `PlaceOrderResponse` ack. Always correlate by `request_id`.
 - Track the order's lifecycle on the stream; once `broker_order_id` / `exchange_order_id` are assigned, they become the durable handles.
 - The client-supplied `pin` is verified against the account's reference PIN. If the account has no PIN configured → `PIN_NOT_SETUP`. If missing or mismatched → `INVALID_PIN`.
